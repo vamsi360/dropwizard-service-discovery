@@ -17,6 +17,9 @@
 
 package io.dropwizard.discovery.bundle;
 
+import static java.util.Objects.isNull;
+import static java.util.Objects.nonNull;
+
 import com.flipkart.ranger.ServiceProviderBuilders;
 import com.flipkart.ranger.healthcheck.Healthcheck;
 import com.flipkart.ranger.healthcheck.HealthcheckStatus;
@@ -44,6 +47,7 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.curator.framework.imps.CuratorFrameworkState;
 import org.apache.curator.retry.RetryForever;
 
 import java.net.InetAddress;
@@ -72,9 +76,12 @@ public abstract class ServiceDiscoveryBundle<T extends Configuration> implements
 
     }
 
+    public ServiceDiscoveryBundle(CuratorFramework curator) {
+        this.curator = curator;
+    }
+
     @Override
     public void initialize(Bootstrap<?> bootstrap) {
-
     }
 
     @Override
@@ -88,11 +95,13 @@ public abstract class ServiceDiscoveryBundle<T extends Configuration> implements
         final long validdRegistationTime = System.currentTimeMillis() + serviceDiscoveryConfiguration.getInitialDelaySeconds() * 1000;
         rotationStatus = new RotationStatus(serviceDiscoveryConfiguration.isInitialRotationStatus());
 
-        curator = CuratorFrameworkFactory.builder()
+        if(isNull(curator)) {
+            curator = CuratorFrameworkFactory.builder()
                 .connectString(serviceDiscoveryConfiguration.getZookeeper())
                 .namespace(namespace)
                 .retryPolicy(new RetryForever(serviceDiscoveryConfiguration.getConnectionRetryIntervalMillis()))
                 .build();
+        }
 
         ServiceProviderBuilder<ShardInfo> serviceProviderBuilder = ServiceProviderBuilders.<ShardInfo>shardedServiceProviderBuilder()
                 .withCuratorFramework(curator)
@@ -149,7 +158,9 @@ public abstract class ServiceDiscoveryBundle<T extends Configuration> implements
         environment.lifecycle().manage(new Managed() {
             @Override
             public void start() throws Exception {
-                curator.start();
+                if(!CuratorFrameworkState.STARTED.equals(curator.getState())) {
+                    curator.start();
+                }
                 serviceProvider.start();
                 serviceDiscoveryClient.start();
                 NodeIdManager nodeIdManager = new NodeIdManager(curator, serviceName);
@@ -160,7 +171,9 @@ public abstract class ServiceDiscoveryBundle<T extends Configuration> implements
             public void stop() throws Exception {
                 serviceDiscoveryClient.stop();
                 serviceProvider.stop();
-                curator.close();
+                if(CuratorFrameworkState.STARTED.equals(curator.getState())) {
+                    curator.close();
+                }
             }
         });
 
